@@ -1,0 +1,230 @@
+#!/usr/bin/env ruby
+
+require 'Yk/path_aux'
+require 'pty'
+
+zpid = Process.ppid
+ENV.each do |k, v|
+	if k =~ /^zsh_#{zpid}_rb_daemon_pid$/
+		exit 2
+	end
+end
+
+def checkZ zpid
+	if File.exist?(pf = "/proc/#{zpid}/exe")
+		l = File.readlink(pf)
+		if !l || File.basename(l) != "zsh"
+			exit 3
+		end
+	else
+		exit 4
+	end
+end
+
+checkZ zpid
+
+
+using ProcWithArguments
+
+def get_file_pos expr, pid
+	"/proc/#{pid}/fd".each_entry do |f|
+		l = f.readlink rescue next
+		if l =~ /^\//
+			l._![:_p?]&.then do |ll|
+				if ll !~ /^\/dev\//
+					arr = ll.read.split Regexp.new(expr.split("'").map{Regexp.escape(_1)}.join(".*?")), -1
+					if arr.size == 2
+						return [ll, arr[0].lines.size]
+					end
+				end
+			end
+		end
+	end
+	[nil]
+end
+
+if ENV['TMPDIR_YK']
+		TMP_ROOT = ENV['TMPDIR_YK']
+else
+		TMP_ROOT = "/tmp/Yk"
+end
+(ZSH_RB_TMP = "#{TMP_ROOT}#{$0.basename}").mkdir_p
+(from_ruby = "#{ZSH_RB_TMP}.#{zpid}.r")._![:_e?]&.mkfifo
+(to_ruby = "#{ZSH_RB_TMP}.#{zpid}.w")._![:_e?]&.mkfifo
+
+
+#"lsof #{from_ruby} 2>/dev/null".read_each_line_p do |ln|
+#	if ln =~ /^ruby\s/
+#		ln.split[1]&.then do |pid|
+#			Process.kill :USR1, pid.to_i
+#		end
+#	end
+#end
+
+
+fork do
+	begin
+		Process.daemon true
+        at_exit do
+          %W{r w}.each do |m|
+            "/tmp/#{$0.basename}.*.#{m}".glob.each do |f|
+              if f =~ /\.(\d+)\./
+                if !"/proc/#{$1}"._d?
+                  f.rm rescue nil
+                end
+              end
+            end
+          end
+        end
+		fork do
+			STDERR.reopen("/proc/#{zpid}/fd/2".readlink, "w") rescue nil
+			fp = File.open("#{ENV['HOME']}/.zsh_rb.log", "a")
+			w.close
+			data = ""
+			loop do
+				IO.select [r]
+				begin
+					data << r.readpartial(1024)
+				rescue EOFError
+					break
+				end
+				data.each_line do |ln|
+					if ln[-1] == "\n"
+						lnt = "#{Time.now.strftime("%Y-%m-%d %H:%M:%S")} zsh[#{zpid}]/zsh_rb[#{pid}] #{ln}"
+						begin
+							fp.flock(File::LOCK_EX)
+							STDERR.write lnt
+							fp.write lnt
+						ensure
+							fp.flock(File::LOCK_UN)
+						end
+						data = data[ln.bytesize..-1]
+					end
+				end
+			end
+			exit 0
+		end
+		STDIN.reopen("/proc/#{zpid}/fd/0".readlink) rescue nil
+		STDOUT.reopen("/proc/#{zpid}/fd/1".readlink, "w") rescue nil
+		Thread.abort_on_exception = true
+		Thread.new do
+			loop do
+				checkZ zpid
+				sleep 1
+			end
+		end
+
+		noUnlink = false
+		trap :USR1 do
+			noUnlink = true
+			exit 0
+		end
+		at_exit do
+			if !noUnlink
+				from_ruby.unlink
+				to_ruby.unlink
+			end
+		end
+
+		cls  = nil
+		cls = class ZshFunction
+			class << self; self; end
+		end
+		STDERR.flush
+		from_ruby.open "r+" do |fw|
+			fw.write $$.to_s + "\x01"
+			fw.flush
+			fw.sync
+			to_ruby.open do |fr|
+				loop do
+					#require 'tz/debug2'
+					all = ""
+					while all[-10..-1] != "\0\0\0\0\0\0\0\0\0\n"
+						IO.select [fr]
+						begin
+							all += fr.readpartial(4096)
+						rescue EOFError
+							checkZ zpid
+							break
+						end
+					end
+					all.gsub! /\0\0\0\0\0\0\0\0\0\n/, ""
+					next if all.empty?
+					begin
+						all.strip!
+						ws = nil
+						if all =~ /^__yk_eval_function__\0/
+							args = $'.split /\0/, -1
+							m = args.shift
+							#p m
+							#p args
+							begin
+								ws = ZshFunction.method(m).call(*args)
+							rescue Exception
+								STDERR.write $!.to_s + "\n" + $!.backtrace * "\n" + "\n"
+								ws = ""
+							end
+						else
+							marr = cls.instance_methods
+							pos = get_file_pos(all, zpid)
+							cls.class_eval(all,*pos)
+							ws = ""
+							(cls.instance_methods - marr).each do |nm|
+								ws << <<~END
+									function #{nm.to_s}(){
+										trans_ruby #{nm.to_s} "$@"
+									}
+								END
+							end
+						end
+						fw.write ws.to_s + "\x01"
+						fw.flush
+						fw.sync
+					rescue Exception => e
+						if !e.is_a? SystemExit
+							STDERR.write e.inspect + "\n" + e.backtrace * "\n" + "\n"
+						end
+					end
+				end
+			end
+		end
+	rescue Exception => e
+		if !e.is_a? SystemExit
+			STDERR.write e.inspect + "\n" + e.backtrace * "\n" + "\n"
+		end
+	end
+end
+
+#io.close
+
+print <<~END
+	if [ -z "\$from_ruby" ];
+		then exec {from_ruby}<>#{from_ruby};
+		if [ -z "\$to_ruby" ];
+			then exec {to_ruby}<>#{to_ruby};
+		fi;
+		read -Erd "\x01" -u \$from_ruby tmp > /dev/null;
+		export zsh_#{zpid}_rb_daemon_pid=\$tmp;
+		function trans_ruby(){;
+			echo -n __yk_eval_function__ >&\$to_ruby;
+			cname=$1;
+			while [ "$#" != "0" ]; do;
+				echo -n "\\0" >&\$to_ruby;
+				echo -n "$1" >&\$to_ruby;
+				shift;
+			done;
+			echo -n "\\0\\0\\0\\0\\0\\0\\0\\0\\0\\n" >&\$to_ruby;
+			local tmp="\0";
+			read -Erd "\x01" -u \$from_ruby tmp > /dev/null;
+			eval \$cname=\\$tmp;
+		};
+		function def_ruby(){;
+			echo -n "${1//\\\\/\\\\\\\\}" >&\$to_ruby;
+			tmp="\0";
+			echo -n "\\0\\0\\0\\0\\0\\0\\0\\0\\0\\n" >&\$to_ruby;
+			read -Erd "\x01" -u \$from_ruby tmp > /dev/null;
+			eval \$tmp;
+		};
+	fi;
+END
+

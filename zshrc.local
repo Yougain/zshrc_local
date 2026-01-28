@@ -1,0 +1,946 @@
+#!/bin/env zsh
+
+
+if [ -x /usr/bin/go ];then
+	export GOPATH=$(go env GOPATH)
+	export PATH=$PATH:$GOPATH/bin
+fi
+if [[ ! $PATH =~ "/usr/local/bin" ]]; then
+    export PATH="/usr/local/bin:$PATH"
+fi
+
+if grep -q microsoft /proc/version; then
+    export IN_WSL=1
+else
+    export IN_WSL=
+fi
+
+
+_rm_all(){
+	if [ ! -e "$1" ];then
+		err "'$1' does not exist."
+		return 1
+	fi
+	local d
+	local dlen
+	local ln
+	local blockDevs
+	local f
+	local l
+	if [ -n "`ls -A /dev/block`" ];then
+		for f in /dev/block/*;do
+			l="`readlink -f $f`"
+			if [ "${l:0:5}" = "/dev/" ];then
+				blockDevs+=("${l#/dev/}")
+			fi
+		done 2> /dev/null
+	fi
+	d=$($__sudo__ realpath $1)
+	if [ "$d" = "/" ];then
+		err "cannot use rm_all to '/'"
+		return 1
+	fi
+	dlen=${#d}
+	dlen=$((dlen + 1))
+	cat /proc/mounts|awk '{print $2}'| sed -n '1!G;h;$p' |while read ln;do
+		if [ "${ln:0:$dlen}" = "$d/" ];then
+			if ! $__sudo__ umount $VERBOSE_OPT $ln;then
+				err "cannot unmount '$ln'"
+				return 1
+			fi
+		fi
+	done
+	local lnLen1
+	local fsType
+	local b
+	local doRm
+	local dln
+	cat /proc/mounts|awk '{print $2 " " $1}'| sed -n '1!G;h;$p' |while read ln;do
+		dln="`echo $ln | awk '{print $1}'`"
+		lnLen1=$((${#dln} + 1))
+		if [ "${d:0:$lnLen1}" = "$dln/" -o "$d" = "$dln" -o "$dln" = "/" ];then
+			fsType="`echo $ln | awk '{print $2}'`"
+			if [ "$fsType" = "overlay" ];then
+				doRm=1
+			else
+				if [ "${fsType:0:5}" = "/dev/" ];then
+					fsType=`readlink -f $fsType`
+					for b in ${blockDevs[@]}; do
+						if [ "$b" = "${fsType#/dev/}" ];then
+							doRm=1
+							break
+						fi
+					done
+					if [ -n "$WSL_INTEROP" ]; then
+						if [ "${fsType:0:7}" = "/dev/sd" ];then
+							doRm=1
+						fi
+					fi
+				elif [ -n "$WSL_INTEROP" ] && [[ ${fsType:0:2} =~ [A-Z]: ]];then
+					doRm=1
+				fi
+			fi
+			if [ -n "$doRm" ];then
+				$__sudo__ /bin/rm $VERBOSE_OPT --one-file-system -rf "$d"
+			else
+				err "cannot delete '$d'"
+				return 1
+			fi
+			break
+		fi
+	done
+}
+
+
+rm_all(){
+	if [ ! -d /dev/block ];then
+		err "directory, '/dev/block' is missing"
+		return 1
+	fi
+	if [ ! -r /proc/mounts ];then
+		err "cannot read /proc/mounts"
+		return 1
+	fi
+	local f
+	for f in $@;do
+		_rm_all "$f"
+	done
+}
+
+rm(){
+	local VERBOSE_OPT
+	if [ -n "$DEBUG" ];then
+		VERBOSE_OPT="-v"
+	fi
+	if [ "$1" = "-rf" ];then
+		shift
+		rm_all $@
+	else
+		$__sudo__ /bin/rm $@
+	fi
+}
+
+
+sudo(){
+	local __sudo__=sudo
+	case "$1" in
+		vi)
+			shift
+			__sudo vim $@
+			;;
+		rm)
+			__sudo__=/usr/bin/sudo
+			shift
+			rm $@
+			;;
+		*)
+			__sudo $@
+			;;
+	esac
+}
+
+
+if [ -e /usr/bin/apt-get ];then
+   export IST=apt-get
+   export DVP=dev
+fi
+if [ -e /usr/bin/yum ];then
+   export IST=yum
+   export DVP=devel
+fi
+if [ -e /usr/bin/dnf ];then
+   export IST=dnf
+   export DVP=devel
+fi
+
+if [ "$ZSH_NAME" = "zsh" ]; then
+
+FPATH="/usr/share/zsh/`zsh --version|awk '{print $2}'`/functions:$FPATH"
+export LC_ALL="en_US.UTF-8"
+export LANG="en_US.UTF-8"
+## Completion configuration
+#
+fpath=(${HOME}/.zsh/functions/Completion ${fpath})
+autoload -Uz compinit
+#compinit -u
+compinit
+
+
+
+mkdir -p $HOME/.tmp/Yk/zsh/zsh.local
+
+eval $(zsh_rb)
+
+# users generic .zshrc file for zsh(1)
+
+# System wide functions and aliases
+# Environment stuff goes in /etc/profile
+
+# By default, we want this to get set.
+# Even for non-interactive, non-login shells.
+if [ $UID -gt 99 ] && [ "`id -gn`" = "`id -un`" ]; then
+    umask 002
+else
+    umask 022
+fi
+
+# are we an interactive shell?
+## Default shell configuration
+#
+# set prompt
+#
+autoload colors
+colors
+
+case ${UID} in
+0)
+	prompt_symbol="#"
+	prompt_symbol_with_color="%{${fg[red]}%}#%{${reset_color}%}"
+	;;
+*)
+	prompt_symbol="$"
+	prompt_symbol_with_color="%{${fg[green]}%}\$%{${reset_color}%}"
+esac
+
+def_ruby '
+	def __first_cmd c = nil
+		if !c
+			"__nocmd__"
+		else
+			data = c.strip
+			arr = data.split
+			progList = %W{vi vim ruby perl python supervise sv service sudo sh bash zsh rpm rpmbuild}
+			cmdl = []
+			arr.each do |e|
+				next if progList.include? File.basename(e)
+				next if e =~ /^\-/
+				cmdl.push File.basename(e)
+			end
+			if data =~ /^(scr|\/usr\/bin\/scr|resu|resudo)(\s|$)/
+				"__nocmd__"
+			else
+				cmdl.join(" ")
+			end
+		end
+	end
+'
+
+if [ "$__shell_rnd__" = "" ];then
+	__shell_rnd__=$(( $RANDOM./1<<15 ))
+fi
+
+
+def_ruby '
+	def __clear_prev__ tmp
+		require "Yk/path_aux"
+		["cmd", "idle", "cmd-before"].each do |e|
+			"$HOME/.tmp/Yk/zsh/zsh.local/#{e}.*".glob.each do |f|
+				if f =~ /#{Regexp.escape e}.(\d+)/
+					if !"/proc/#{tmp.to_i}".exist?
+						f.unlink
+					end
+				end
+			end
+		end
+	end
+'
+__clear_prev__ $$
+
+def_ruby '
+	def __clear_zsh_dsize_max
+		mf = ENV["HOME"] + "/.zsh_d_size_max"
+		if File.exist? mf
+			print "\x1b7"
+			STDOUT.flush
+			system "tput cup 0 0"
+			system "tput hpa 999"
+			dsmax = IO.read(mf).to_i rescue 0
+			print "\x1b[#{dsmax - 1}D\x1b[35m"
+			print " " * (dsmax)
+			STDOUT.flush
+			print "\x1b[0m\x1b8"
+			STDOUT.flush
+			File.delete mf
+		end
+	end
+'
+
+__one_arg(){
+	echo -n $1
+}
+
+
+__cur_hist(){
+	__one_arg `history -1`
+}
+
+
+mkdir -p "$HOME/.tmp/Yk/zsh/zsh.local"
+
+zstyle ':completion:*:default' menu select=2
+preexec() {
+	__clear_zsh_dsize_max
+	if [ "$ST_hist" != "1" ]; then
+		if [ -e $HOME/.zsh_to_cd ] && [ -d "`cat $HOME/.zsh_to_cd`" ];then
+			cd `cat $HOME/.zsh_to_cd`
+			rm  -f $HOME/.zsh_to_cd
+		fi
+		mkdir -p ~/.zsh_history_pwd.d
+		echo $PPWD > ~/.zsh_history_pwd.d/`__cur_hist`
+		PPWD=$PWD
+	fi
+	local cmd
+	__first_cmd $1
+	cmd=$__first_cmd
+	if [ "$cmd" != "__nocmd__" ]; then
+		case $TERM in
+		xterm*)
+			echo -ne "\033]0;$cmd (${HOST%%.*}/`date +%H:%M:%S`)"; echo -ne "\007"
+		    ;;
+		screen)
+			echo -ne "\033_$cmd (${HOST%%.*}/`date +%H:%M:%S`)"; echo -ne "\033\\"
+		    ;;
+		esac
+		if [ -e $HOME/.tmp/Yk/zsh/zsh.local/cmd.$$.$__shell_rnd__ ];then
+			mv -f "$HOME/.tmp/Yk/zsh/zsh.local/cmd.$$.$__shell_rnd__" "$HOME/.tmp/Yk/zsh/zsh.local/cmd-before.$$.$__shell_rnd__"
+		fi
+		echo -ne $1 > "$HOME/.tmp/Yk/zsh/zsh.local/cmd.$$.$__shell_rnd__"
+		rm -f "$HOME/.tmp/Yk/zsh/zsh.local/idle.$$.$__shell_rnd__"
+	fi
+}
+precmd() {
+	echo -ne > "$HOME/.tmp/Yk/zsh/zsh.local/idle.$$.$__shell_rnd__"
+}
+if functions END >/dev/null 2>&1; then
+	END <<EOF
+		rm -f "$HOME/.tmp/Yk/zsh/zsh.local/idle.$$.$__shell_rnd__"
+		rm -f "$HOME/.tmp/Yk/zsh/zsh.local/cmd.$$.$__shell_rnd__"
+		rm -f "$HOME/.tmp/Yk/zsh/zsh.local/cmd-before.$$.$__shell_rnd__"
+EOF
+else
+	zshexit(){
+		rm -f "$HOME/.tmp/Yk/zsh/zsh.local/idle.$$.$__shell_rnd__"
+		rm -f "$HOME/.tmp/Yk/zsh/zsh.local/cmd.$$.$__shell_rnd__"
+		rm -f "$HOME/.tmp/Yk/zsh/zsh.local/cmd-before.$$.$__shell_rnd__"
+	}
+fi
+ST_hist=1 preexec
+ST_hist=0
+
+# auto change directory
+#
+setopt auto_cd
+
+# auto directory pushd that you can get dirs list by cd -[tab]
+#
+setopt auto_pushd
+
+# command correct edition before each completion attempt
+#
+setopt correct
+
+# compacked complete list display
+#
+setopt list_packed
+
+# no remove postfix slash of command line
+#
+setopt noautoremoveslash
+
+# no beep sound when complete list displayed
+#
+setopt nolistbeep
+
+enable_bracketed_mode() {
+    printf "\e[?2004h"
+}
+
+disable_bracketed_mode() {
+    printf "\e[?2004l"
+}
+zle -N enable_bracketed_mode
+zle -N disable_bracketed_mode
+
+echo_n(){
+	echo -n $@
+}
+
+zle -N none echo_n
+
+
+## Keybind configuration
+#
+# emacs like keybind (e.x. Ctrl-a gets to line head and Ctrl-e gets
+#   to end) and something additions
+#
+bindkey -e
+case "${TERM}" in
+xterm*)
+	bindkey "\e[200~" disable_bracketed_mode
+	bindkey "\e[201~" none
+	bindkey "\e[H" beginning-of-line # Home gets to line head
+	bindkey "\e[F" end-of-line # End gets to line end
+	bindkey "^[[1~" beginning-of-line # Home gets to line head
+	bindkey "^[[4~" end-of-line # End gets to line end
+	;;
+gnome*)
+	bindkey "\eOH" beginning-of-line # Home gets to line head
+    bindkey "\eOF" end-of-line # End gets to line end
+	bindkey "^[[1~" beginning-of-line # Home gets to line head
+	bindkey "^[[4~" end-of-line # End gets to line end
+	;;
+*)
+	bindkey "^[[1~" beginning-of-line # Home gets to line head
+	bindkey "^[[4~" end-of-line # End gets to line end
+	;;
+esac
+
+
+
+resu() {
+	/bin/su -c "if [ -e $HOME/.tmp/Yk/zsh/zsh.local/cmd.$$.$__shell_rnd__ ]; then ( zsh -c 'cat $HOME/.tmp/Yk/zsh/zsh.local/cmd.$$.$__shell_rnd__;echo' >> ~/.zsh_history;zsh -l $HOME/.tmp/Yk/zsh/zsh.local/cmd.$$.$__shell_rnd__ ); fi;exec zsh -l"
+}
+resudo() {
+	if [ -e $HOME/.tmp/Yk/zsh/zsh.local/cmd.$$.$__shell_rnd__ ]; then
+		__sudo `cat $HOME/.tmp/Yk/zsh/zsh.local/cmd.$$.$__shell_rnd__`
+	fi
+}
+
+
+
+if [ "`id -u`" = 0 ];then
+	__sudo(){
+		$@
+	}
+else
+	ruby<<END
+		require 'pty'
+		require 'etc'
+
+		begin
+			userName = Etc.getpwuid(Process.uid).name
+		rescue ArgumentError
+			exit 1
+		end
+
+		testStr = Random.rand(100000000).to_s
+		PTY.spawn "sudo echo #{testStr}" do |r, w, pid|
+			begin
+				response = r.readpartial 2048
+				case response
+				when /^\[sudo\] password for #{Regexp.escape userName}:/
+					Process.kill :INT, pid
+					exit 0
+				when /#{testStr}/
+					exit 0
+				else
+					print response.ln
+					exit 1
+				end
+			rescue EOFError
+				exit 1
+			end
+		end
+END
+	SUDO_ABLE=$?
+	if [ "$SUDO_ABLE" = "0" ];then
+		__sudo(){
+			/usr/bin/sudo $@
+		}
+	else
+		__sudo(){
+			local ARGS="$@"
+			ARGS=#{ARGS//\'/\'\"\'\"\'/}
+			/bin/su -c "'$ARGS'"
+		}
+	fi
+fi
+
+
+su(){
+    if [ -z "$@" ]; then
+        if [ "$SUDO_ABLE" = "0" ]; then
+            __sudo $SHELL
+        else
+        	/bin/su
+        fi
+    else
+        /bin/su $@
+    fi
+}
+
+
+if [ ! -e "$HOME/.zshenv" ];then
+	touch $HOME/.zshenv
+fi
+
+if [ ! -e "$HOME/.zsh_bindkey" ];then
+	echo '
+#bindkey settings
+
+bindkey "\e[H" beginning-of-line # Home gets to line head
+bindkey "\e[F" end-of-line # End gets to line end
+bindkey "\eOH" beginning-of-line # Home gets to line head
+bindkey "\eOF" end-of-line # End gets to line end
+bindkey "^[[1~" beginning-of-line # Home gets to line head
+bindkey "^[[4~" end-of-line # End gets to line end
+bindkey "^[[3~" delete-char # Del
+bindkey "^[[5~" beginning-of-history
+bindkey "^[[6~" end-of-history
+bindkey "^[[5;2~" history-beginning-search-backward-end
+bindkey "^[[6;2~" history-beginning-search-forward-end
+bindkey "^[[1;2A" history-beginning-search-backward-end
+bindkey "^[[1;2B" history-beginning-search-forward-end
+bindkey -s "^[s" "resudo\n" #for sudo
+bindkey -s "^[S" "resu\n" #for su
+
+# historical backward/forward search with linehead string binded to ^P/^N
+#
+bindkey "^p" history-beginning-search-backward-end
+bindkey "^n" history-beginning-search-forward-end
+bindkey "\\ep" history-beginning-search-backward-end
+bindkey "\\en" history-beginning-search-forward-end
+
+# reverse menu completion binded to Shift-Tab
+#
+bindkey "\e[Z" reverse-menu-complete
+' > $HOME/.zsh_bindkey
+fi
+
+. $HOME/.zsh_bindkey
+
+autoload history-search-end
+zle -N history-beginning-search-backward-end history-search-end
+zle -N history-beginning-search-forward-end history-search-end
+
+autoload -Uz bracketed-paste-magic
+zle -N bracketed-paste bracketed-paste-magic
+
+
+## Command history configuration
+#
+HISTFILE=${HOME}/.zsh_history
+HISTSIZE=50000
+SAVEHIST=50000
+setopt hist_ignore_dups     # ignore duplication command history list
+setopt share_history        # share command history data
+
+def_ruby '
+	def hist_set_cd hx,home
+		d = nil
+		f = "#{home}/.zsh_history_pwd.d/#{hx}"
+		if File.exist? f
+			d = IO.read(f).lines[-1].strip
+		end
+		if d
+			print "\x1b7"
+			STDOUT.flush
+			system "tput cup 0 0"
+			system "tput hpa 999"
+			mf = "#{home}/.zsh_d_size_max"
+			dsmax = IO.read(mf).to_i rescue 0
+			if dsmax > d.size
+				print "\x1b[#{dsmax - 1}D\x1b[35m"
+				print " " * (dsmax - d.size)
+			else
+				print "\x1b[#{d.size - 1}D\x1b[35m"
+				File.open mf, "w" do |fw|
+					fw.write d.size.to_s
+				end
+			end
+			print d
+			print "\x1b[0m\x1b8"
+			STDOUT.flush
+			File.open "#{home}/.zsh_to_cd", "w" do |fw|
+				fw.write d
+			end
+		else
+			if File.exist? "#{home}/.zsh_to_cd"
+				File.delete "#{home}/.zsh_to_cd"
+			end
+		end
+	end
+'
+
+function history-beginning-search-backward-end-pwd(){
+	zle .history-beginning-search-backward
+	hist_set_cd $HISTNO $HOME
+}
+
+function history-beginning-search-forward-end-pwd(){
+	zle .history-beginning-search-forward
+	hist_set_cd $HISTNO $HOME
+}
+
+function up-line-or-history-hook(){
+	zle .up-line-or-history
+	hist_set_cd $HISTNO $HOME
+}
+
+function down-line-or-history-hook(){
+	zle .down-line-or-history
+	hist_set_cd $HISTNO $HOME
+}
+
+zle -N history-beginning-search-backward-end history-beginning-search-backward-end-pwd
+zle -N history-beginning-search-forward-end history-beginning-search-forward-end-pwd
+zle -N up-line-or-history up-line-or-history-hook
+zle -N down-line-or-history down-line-or-history-hook
+
+
+
+## zsh editor
+#
+autoload zed
+
+
+## Prediction configuration
+#
+#autoload predict-on
+#predict-off
+
+
+## Alias configuration
+#
+# expand aliases before completing
+#
+setopt complete_aliases     # aliased ls needs if file/dir completions work
+
+alias where="command -v"
+alias j="jobs -l"
+
+alias du="du -h"
+alias df="df -h"
+
+## terminal configuration
+#
+case "${TERM}" in
+screen)
+    TERM=xterm
+    ;;
+esac
+
+case "${UID}" in
+0)
+	mode_color="%{${fg[red]}%}"
+	bold_start="%B"
+	bold_end="%b"
+	#alias rm='rm -i'
+	alias cp='cp -i'
+	alias mv='mv -i'
+	alias vi='vim'
+	;;
+*)
+	mode_color="%{${fg[cyan]}%}"
+	;;
+esac
+PROMPT="${bold_start}[$mode_color%n@%m %{$fg[yellow]%}%~%{${reset_color}%}${bold_start}]${prompt_symbol_with_color}$bold_end "
+RPROMPT="%{${fg[magenta]}%}%*%{${reset_color}%}"
+
+IFS=$'\n\t '
+
+
+_zv(){
+	compadd `ls /etc/service_pool`
+}
+compdef _zv zv
+
+_sv(){
+    compadd `systemctl list-units --type=service -all | ruby -e 'STDIN.each_line do |ln| if ln =~ /([^\s]+)\.service/; print $1 + "\n";end;end'`
+}
+compdef _sv sv
+_lv(){
+	compadd `__sudo journalctl -F '_SYSTEMD_UNIT' | ruby -e 'STDIN.each_line do |ln| if ln =~ /([^\s]+)\.service/; print $1 + "\n";end;end'`
+	compadd `getLVWList`
+}
+compdef _lv lv
+
+def_ruby '
+	def getLVWList
+		require "Yk/path_aux"
+		require "set"
+		ret = Set.new
+		proc = Proc.new do |d, dir|
+			dir ||= d
+			d.recursive do |e|
+				next if e._d?
+				begin
+					f = e.relative_path_from dir
+					if f =~ /\.\d+$/ || f =~ /\-20\d+/ || f =~ /sa\/sa(r|)\d+/ || e == "/var/log/sa"
+						next
+					end
+					ret.add f
+					if e.directory? && !e.file?(e / "current")
+						proc.call e, dir
+					end
+				rescue => e
+					h = ENV["HOME"]
+					"#{h}/.tmp/zshtest".write_a e.to_s
+				end
+			end
+		end
+		["/var/log"].each do |e|
+			proc.call e
+		end
+		require "shellwords"
+		Shellwords.join(ret.to_a)
+	end
+'
+
+_lvw(){
+	getLVWList
+	compadd `echo $getLVWList`
+}
+compdef _lvw lvw
+
+_rpb(){
+	compadd `ls $HOME/rpb $HOME/rwork|sort|uniq|grep -v $HOME`
+}
+
+compdef _rpb rpb
+
+_e(){
+	compadd -V 1 `/usr/local/bin/comp_console_files ~/.console_files`
+}
+
+bindkey -r '^[[Z'
+compdef -k _e complete-word '^[[Z'
+
+
+_e2(){
+	compadd -V 2 `/usr/local/bin/comp_console_files ~/.command_arg_files`
+}
+bindkey -r '^[[27;5;9~'
+compdef -k _e2 complete-word '^[[27;5;9~'
+
+
+_e3(){
+	compadd -V 2 `/usr/local/bin/comp_console_files ~/.command_arg_dirs`
+}
+bindkey -r '^[[27;6;9~'
+compdef -k _e3 complete-word '^[[27;6;9~'
+
+
+make(){
+	if [ "$1" = "install" ]; then
+		shift
+		__sudo make install $@
+	else
+		/usr/bin/make $@
+	fi
+}
+
+gem(){
+	if [ "$1" = "install" ]; then
+		shift
+		__sudo gem install $@
+	else
+		/usr/bin/gem $@
+	fi
+}
+
+rpm(){
+	ruby <<END
+	cmd = %w{$1}[0]
+	cmds = %w{$*}
+	if cmd[0] == ?- && cmd[1] != ?-
+		if ENV['SUDO_ABLE'] == "0" && Process.euid != 0 && cmd =~ /[iUe]/ && !cmds.find{|e| e =~ /^[^\-].*\.src\.rpm$/}
+			system *%w{/usr/bin/sudo /bin/rpm $*}
+		else
+			system *%w{/bin/rpm $*}
+		end
+	end
+END
+}
+
+
+inst(){
+	__sudo $IST -y install $@
+}
+
+
+upd(){
+	__sudo $IST -y update $@
+}
+
+
+
+jp(){
+	if [ "$TTY" = "/dev/tty1" ];then
+		loadkeys jp106
+	else
+		LANG=ja_JP.UTF-8
+		LC_ALL=ja_JP.UTF-8
+	fi
+}
+
+us(){
+	if [ "$TTY" = "/dev/tty1" ];then
+		loadkeys us
+	else
+		LANG=en_US.UTF-8
+		LC_ALL=en_US.UTF-8
+	fi
+}
+
+proz(){
+	/usr/bin/proz -k=10 "$@"
+}
+
+iotop(){
+	/usr/bin/dstat --top-io-adv --top-bio-adv "$@"
+}
+
+explorer(){
+	/mnt/c/Windows/explorer.exe "$@"
+}
+
+
+if [ -e /usr/bin/cyppath ]; then
+	__SYSTEM=`cygpath -u ${SYSTEMROOT}`/system32
+	alias ping="cocot -p CP932 $__SYSTEM/ping.exe -n 10000"
+	alias arp="cocot -p CP932 $__SYSTEM/arp.exe"
+	alias nslookup="cocot -p CP932 $__SYSTEM/nslookup.exe"
+	alias traceroute="cocot -p CP932 $__SYSTEM/tracert.exe"
+	alias route="cocot -p CP932 $__SYSTEM/route.exe"
+	alias netstat="cocot -p CP932 $__SYSTEM/netstat.exe"
+	alias ipconfig="cocot -p CP932 $__SYSTEM/ipconfig.exe"
+	alias ifconfig="cocot -p CP932 $__SYSTEM/ipconfig.exe"
+	alias cpl='/cygdrive/c/WINDOWS/explorer.exe /e,::{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\::{21EC2020-3AEA-1069-A2DD-08002B30309D}'
+	#alias start="$SYSTEM/CMD.exe /c start"
+	alias net="cocot -p CP932 $__SYSTEM/net.exe"
+	alias start=cygstart
+	unset __SYSTEM
+elif [ ! -e /sbin/ifconfig ]; then
+	alias /sbin/ifconfig="ip a show"
+fi
+alias axel="axel --num-connections=10"
+alias vi="vim"
+
+
+
+fnd(){
+	echo -n > /dev/nil
+	# empty
+}
+
+
+def_ruby '
+	require "shellwords"
+	require "Yk/path_aux"
+	def raw_cmd_line buff = nil
+		if buff
+			carr = []
+			begin
+				carr = Shellwords.split(buff)
+			rescue
+				return buff
+			end
+			if carr[0] == "fnd"
+				carr.shift
+				dir = "."
+				fname = "*"
+				if carr.size >= 2
+					dir = carr[0]
+					fname = carr[1]
+				elsif carr.size == 1
+					if carr[0] !~ /^(.*)\/([^\/]*)$/
+						fname = carr[0]
+					else
+						fname = $2
+						dir = $1
+						if dir == ""
+							dir = "/"
+						end
+					end
+				end
+				carr.clear
+				carr.push "find"
+				carr.push dir
+				carr.push "-name"
+				carr.push fname
+				Shellwords.shelljoin(carr)
+			else
+				carr.shift
+				carr.each do |e|
+					if e =~ /^[~\w_\.\/][~\w_\.\/-]*$/
+						e = e.expand_path
+						if e._d?
+							"~/.command_arg_dirs".expand_path.write_la e.ln 
+						else
+							"~/.command_arg_files".expand_path.write_la e.ln
+						end
+					end
+				end
+				""
+			end
+		else
+			""
+		end
+	end
+'
+function _raw_cmd_line {
+	export RAW_CMD_LINE=$BUFFER
+	raw_cmd_line $BUFFER
+	if [ -n "$raw_cmd_line" ]; then
+		BUFFER=$raw_cmd_line
+	fi
+	zle accept-line
+}
+
+zle -N raw_cmd_line_widget _raw_cmd_line
+bindkey '^J' raw_cmd_line_widget
+bindkey '^M' raw_cmd_line_widget
+
+if [ -f /etc/colorrc ]; then
+    eval `dircolors /etc/colorrc`
+fi
+
+#export PERL_LOCAL_LIB_ROOT="$PERL_LOCAL_LIB_ROOT:/root/perl5";
+#export PERL_MB_OPT="--install_base /root/perl5";
+#export PERL_MM_OPT="INSTALL_BASE=/root/perl5";
+#export PERL5LIB="/root/perl5/lib/perl5:$PERL5LIB";
+#export PATH="/root/perl5/bin:$PATH";
+export DISPLAY=localhost:0.0;
+stty stop undef
+
+export RUBYOPT='-W:no-experimental'
+
+
+
+fi
+
+enable_bracketed_mode () {
+        printf "\e[?2004h"
+}
+
+disable_bracketed_mode () {
+        printf "\e[?2004l"
+}
+
+key(){
+    showkey -a
+}
+
+g(){
+	local g="`which g`"
+    if [ -e "$g" ];then
+        $g "$@"
+		local ret=$?
+		if [ -e ~/.g.cd ];then
+			cd `cat ~/.g.cd`
+			rm -f ~/.g.cd
+		fi
+		return $ret
+	else
+		err "'/usr/bin/g' is not installed."
+		return 1
+	fi
+}
+
+echo -ne "\e[?12h"
+
+if [ -n "$IN_WSL" ]; then
+	alias shutdown='wsl.exe --terminate $WSL_DISTRO_NAME'
+	alias reboot='cd /mnt/c/ && cmd.exe /c start "rebooting WSL" cmd /c "timeout 5 && wsl -d $WSL_DISTRO_NAME" && wsl.exe --terminate $WSL_DISTRO_NAME'
+fi

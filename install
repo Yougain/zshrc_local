@@ -1,0 +1,7 @@
+#!/bin/env bash
+
+. gy_support
+
+
+install hist_yk.rb zsh_rb
+install zshrc.local /etc
