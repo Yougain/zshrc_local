@@ -76,6 +76,8 @@ fork do
             end
           end
         end
+		r, w = IO.pipe
+		pid = Process.pid
 		fork do
 			STDERR.reopen("/proc/#{zpid}/fd/2".readlink, "w") rescue nil
 			fp = File.open("#{ENV['HOME']}/.zsh_rb.log", "a")
