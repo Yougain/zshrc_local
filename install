@@ -4,4 +4,11 @@
 
 
 install hist_yk.rb zsh_rb
-install zshrc.local /etc
+install zshrc.local /usr/local/etc
+
+# automatically add to ($HOME|etc)/.zshrc on install in case the file name initiated with dot.
+# if you want to avoid this, please comment out the following lines added on files.
+install_lines ".zshrc" <<END
+    [[ -f /usr/local/etc/zshrc.local ]] && . /usr/local/etc/zshrc.local
+END
+
