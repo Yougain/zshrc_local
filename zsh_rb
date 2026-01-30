@@ -46,9 +46,9 @@ end
 if ENV['TMPDIR_YK']
 		TMP_ROOT = ENV['TMPDIR_YK']
 else
-		TMP_ROOT = "/tmp/Yk"
+		TMP_ROOT = "/tmp/Yk.%{$$}"
 end
-(ZSH_RB_TMP = "#{TMP_ROOT}#{$0.basename}").mkdir_p
+(ZSH_RB_TMP = "#{TMP_ROOT}.#{$0.basename}").mkdir_p
 (from_ruby = "#{ZSH_RB_TMP}.#{zpid}.r")._![:_e?]&.mkfifo
 (to_ruby = "#{ZSH_RB_TMP}.#{zpid}.w")._![:_e?]&.mkfifo
 
