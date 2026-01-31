@@ -206,7 +206,7 @@ print <<~END
 			then exec {to_ruby}<>#{to_ruby};
 		fi;
 		read -Erd "\x01" -u \$from_ruby tmp > /dev/null;
-		export zsh_#{zpid}_rb_daemon_pid=\$tmp;
+		zsh_#{zpid}_rb_daemon_pid=\$tmp;
 		function trans_ruby(){;
 			echo -n __yk_eval_function__ >&\$to_ruby;
 			cname=$1;
@@ -227,6 +227,9 @@ print <<~END
 			read -Erd "\x01" -u \$from_ruby tmp > /dev/null;
 			eval \$tmp;
 		};
+		if type -f END >/dev/null 2>&1; then;
+			echo "kill \\$zsh_#{zpid}_rb_daemon_pid" | END;
+		fi;
 	fi;
 END
 
