@@ -838,9 +838,9 @@ def_ruby '
 			begin
 				carr = Shellwords.split(buff)
 			rescue
-				return buff
+				return ""
 			end
-			if carr[0] == "fnd"
+			if carr[0] == "fnd" && carr.size == 3 || carr.size == 2
 				carr.shift
 				dir = "."
 				fname = "*"
@@ -863,7 +863,13 @@ def_ruby '
 				carr.push dir
 				carr.push "-name"
 				carr.push fname
-				Shellwords.shelljoin(carr)
+				if carr[1] == "~"
+					"find ~ " + Shellwords.shelljoin(carr[2..-1])
+				elsif carr[1] =~ /^\~\//
+					"find ~#{carr[1][1..-1].shellescape} " + Shellwords.shelljoin(carr[2..-1])
+				else
+					Shellwords.shelljoin
+				end
 			else
 				carr.shift
 				carr.each do |e|
@@ -948,3 +954,7 @@ if [ -n "$IN_WSL" ]; then
 	alias shutdown='wsl.exe --terminate $WSL_DISTRO_NAME'
 	alias reboot='cd /mnt/c/ && cmd.exe /c start "rebooting WSL" cmd /c "timeout 5 && wsl -d $WSL_DISTRO_NAME" && wsl.exe --terminate $WSL_DISTRO_NAME'
 fi
+
+relaod_zshrc_local(){
+	. /usr/local/etc/zshrc.local
+}
