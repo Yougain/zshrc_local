@@ -24,9 +24,10 @@ _rm_all(){
 	local d
 	local dlen
 	local ln
-	local blockDevs
+	local blockDevs=()
 	local f
 	local l
+	local NoBlockDevDir
 	if [ -n "`ls -A /dev/block`" ];then
 		for f in /dev/block/*;do
 			l="`readlink -f $f`"
@@ -34,7 +35,9 @@ _rm_all(){
 				blockDevs+=("${l#/dev/}")
 			fi
 		done 2> /dev/null
-	fi
+	elif [ -n "$IN_WSL" ]; then
+		NoBlockDevDir=1
+	fi 
 	d=$($__sudo__ realpath $1)
 	if [ "$d" = "/" ];then
 		err "cannot use rm_all to '/'"
@@ -55,6 +58,7 @@ _rm_all(){
 	local b
 	local doRm
 	local dln
+
 	cat /proc/mounts|awk '{print $2 " " $1}'| sed -n '1!G;h;$p' |while read ln;do
 		dln="`echo $ln | awk '{print $1}'`"
 		lnLen1=$((${#dln} + 1))
@@ -71,12 +75,12 @@ _rm_all(){
 							break
 						fi
 					done
-					if [ -n "$WSL_INTEROP" ]; then
+					if [ -n "$NoBlockDevDir" ]; then
 						if [ "${fsType:0:7}" = "/dev/sd" ];then
 							doRm=1
 						fi
 					fi
-				elif [ -n "$WSL_INTEROP" ] && [[ ${fsType:0:2} =~ [A-Z]: ]];then
+				elif [ -n "$NoBlockDevDir" ] && [[ ${fsType:0:2} =~ [A-Z]: ]];then
 					doRm=1
 				fi
 			fi
