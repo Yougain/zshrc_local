@@ -290,7 +290,7 @@ preexec() {
 			rm  -f $HOME/.zsh_to_cd
 		fi
 		mkdir -p ~/.zsh_history_pwd.d
-		echo $PPWD > ~/.zsh_history_pwd.d/`__cur_hist`
+		echo $PWD > ~/.zsh_history_pwd.d/$raw_cmd_line_hist
 		PPWD=$PWD
 	fi
 	local cmd
@@ -530,13 +530,13 @@ setopt hist_ignore_dups     # ignore duplication command history list
 setopt share_history        # share command history data
 
 def_ruby '
-	def hist_set_cd hx,home
+	def hist_set_cd hx,home,pwd
 		d = nil
 		f = "#{home}/.zsh_history_pwd.d/#{hx}"
 		if File.exist? f
 			d = IO.read(f).lines[-1].strip
 		end
-		if d
+		if d && d != pwd
 			print "\x1b7"
 			STDOUT.flush
 			system "tput cup 0 0"
@@ -562,28 +562,40 @@ def_ruby '
 			if File.exist? "#{home}/.zsh_to_cd"
 				File.delete "#{home}/.zsh_to_cd"
 			end
+			mf = "#{home}/.zsh_d_size_max"
+			dsmax = IO.read(mf).to_i rescue 0
+			if dsmax > 0
+				print "\x1b7"
+				STDOUT.flush
+				system "tput cup 0 0"
+				system "tput hpa 999"
+				print "\x1b[#{dsmax - 1}D\x1b[35m"
+				print " " * dsmax
+				print "\x1b[0m\x1b8"
+				STDOUT.flush
+			end
 		end
 	end
 '
 
 function history-beginning-search-backward-end-pwd(){
 	zle .history-beginning-search-backward
-	hist_set_cd $HISTNO $HOME
+	hist_set_cd $HISTNO $HOME $PWD
 }
 
 function history-beginning-search-forward-end-pwd(){
 	zle .history-beginning-search-forward
-	hist_set_cd $HISTNO $HOME
+	hist_set_cd $HISTNO $HOME $PWD
 }
 
 function up-line-or-history-hook(){
 	zle .up-line-or-history
-	hist_set_cd $HISTNO $HOME
+	hist_set_cd $HISTNO $HOME $PWD
 }
 
 function down-line-or-history-hook(){
 	zle .down-line-or-history
-	hist_set_cd $HISTNO $HOME
+	hist_set_cd $HISTNO $HOME $PWD
 }
 
 zle -N history-beginning-search-backward-end history-beginning-search-backward-end-pwd
@@ -890,11 +902,20 @@ def_ruby '
 	end
 '
 function _raw_cmd_line {
+	local hist_last="$(for j in `fc -l -1`; do echo $j;break;done)"
+	raw_cmd_line_hist=$((hist_last + 1))
 	export RAW_CMD_LINE=$BUFFER
 	raw_cmd_line $BUFFER
 	if [ -n "$raw_cmd_line" ]; then
 		BUFFER=$raw_cmd_line
 	fi
+	echo -ne "\033[999C"
+	echo -ne "\033[8D"
+	echo -ne "\033[34m"
+	date +"%H:%M:%S"
+	echo -ne "\033[0m"
+	echo -ne "\033[1A"
+	exec 1>&1
 	zle accept-line
 }
 
