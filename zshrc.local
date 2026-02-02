@@ -537,24 +537,26 @@ def_ruby '
 			d = IO.read(f).lines[-1].strip
 		end
 		if d && d != pwd
-			print "\x1b7"
-			STDOUT.flush
-			system "tput cup 0 0"
-			system "tput hpa 999"
-			mf = "#{home}/.zsh_d_size_max"
-			dsmax = IO.read(mf).to_i rescue 0
-			if dsmax > d.size
-				print "\x1b[#{dsmax - 1}D\x1b[35m"
-				print " " * (dsmax - d.size)
-			else
-				print "\x1b[#{d.size - 1}D\x1b[35m"
-				File.open mf, "w" do |fw|
-					fw.write d.size.to_s
+#			if false
+				#print "\x1b7"
+				#STDOUT.flush
+				#system "tput cup 0 0"
+				#system "tput hpa 999"
+				mf = "#{home}/.zsh_d_size_max"
+				dsmax = IO.read(mf).to_i rescue 0
+				if dsmax > d.size
+					#print "\x1b[#{dsmax - 1}D\x1b[35m"
+					#print " " * (dsmax - d.size)
+				else
+					#print "\x1b[#{d.size - 1}D\x1b[35m"
+					File.open mf, "w" do |fw|
+						fw.write d.size.to_s
+					end
 				end
-			end
-			print d
-			print "\x1b[0m\x1b8"
-			STDOUT.flush
+				#print d
+				#print "\x1b[0m\x1b8"
+				#STDOUT.flush
+#			end
 			File.open "#{home}/.zsh_to_cd", "w" do |fw|
 				fw.write d
 			end
@@ -562,41 +564,113 @@ def_ruby '
 			if File.exist? "#{home}/.zsh_to_cd"
 				File.delete "#{home}/.zsh_to_cd"
 			end
-			mf = "#{home}/.zsh_d_size_max"
-			dsmax = IO.read(mf).to_i rescue 0
-			if dsmax > 0
-				print "\x1b7"
-				STDOUT.flush
-				system "tput cup 0 0"
-				system "tput hpa 999"
-				print "\x1b[#{dsmax - 1}D\x1b[35m"
-				print " " * dsmax
-				print "\x1b[0m\x1b8"
-				STDOUT.flush
-			end
+#			if false
+				mf = "#{home}/.zsh_d_size_max"
+				dsmax = IO.read(mf).to_i rescue 0
+				if dsmax > 0
+					#print "\x1b7"
+					#STDOUT.flush
+					#system "tput cup 0 0"
+					#system "tput hpa 999"
+					#print "\x1b[#{dsmax - 1}D\x1b[35m"
+					#print " " * dsmax
+					#print "\x1b[0m\x1b8"
+					#STDOUT.flush
+				end
+#			end
 		end
 	end
 '
 
+#PROMPT_before=$(expr "$PROMPT" : '\(.*%~\)')
+#PROMPT_after=$(expr "$PROMPT" : '.*%~\(.*\)')
+
+
+reset_prompt() {
+	if [ -e "$HOME/.zsh_d_size_max" ];then
+		local szm
+		local sz
+		local padd=0
+		local spaces=""
+		read szm < "$HOME/.zsh_d_size_max"
+		if [[ "$PWD" = "$HOME/"* ]];then
+			sz=$((${#PWD} - ${#HOME} + 1))
+		elif [ "$PWD" = "$HOME" ];then
+			sz=1
+		else
+			sz=${#PWD}
+		fi
+		if [ "$sz" -lt "$szm" ];then
+			padd=$((szm - sz))
+			spaces=$(printf '%*s' "$padd" '')
+			PROMPT="${PROMPT_before}${spaces}${PROMPT_after}"
+		else
+			PROMPT="${PROMPT_before}${PROMPT_after}"
+		fi
+	else
+		PROMPT="${PROMPT_before}${PROMPT_after}"
+	fi
+	zle reset-prompt
+}
+
+h_set_cd(){
+	echo "h_set_cd CPWD=$CPWD" >> $HOME/.zsh_cpwd
+	if [ -z "$CPWD" ];then
+		CPWD=$PWD
+		if [ "$CPWD" = "$HOME" ];then
+			echo -n 1 > ~/.zsh_d_size_max
+		else
+			echo -n ${#CPWD} > ~/.zsh_d_size_max
+		fi
+	fi
+	hist_set_cd $HISTNO $HOME $CPWD
+	if [ -e "$HOME/.zsh_to_cd" ];then
+		if [ "`cat $HOME/.zsh_to_cd`" != "$PWD" ];then
+			cd "`cat $HOME/.zsh_to_cd`"
+			reset_prompt
+		fi
+	elif [ "$CPWD" != "$PWD" ];then
+		cd "$CPWD"
+		reset_prompt
+	fi
+}
+
+function hook_interrupt() {
+	if [ -z "$CPWD" ];then
+		CPWD=$PWD
+	fi
+	cd "$CPWD"
+	rm -f $HOME/.zsh_d_size_max
+	reset_prompt
+	zle send-break
+}
+zle -N hook_interrupt
+bindkey '^C' hook_interrupt
+trap 'hook_interrupt' INT
+
+
 function history-beginning-search-backward-end-pwd(){
 	zle .history-beginning-search-backward
-	hist_set_cd $HISTNO $HOME $PWD
+	h_set_cd
 }
 
 function history-beginning-search-forward-end-pwd(){
 	zle .history-beginning-search-forward
-	hist_set_cd $HISTNO $HOME $PWD
+	h_set_cd
 }
+
 
 function up-line-or-history-hook(){
 	zle .up-line-or-history
-	hist_set_cd $HISTNO $HOME $PWD
+	h_set_cd
 }
+
 
 function down-line-or-history-hook(){
 	zle .down-line-or-history
-	hist_set_cd $HISTNO $HOME $PWD
+	h_set_cd
 }
+
 
 zle -N history-beginning-search-backward-end history-beginning-search-backward-end-pwd
 zle -N history-beginning-search-forward-end history-beginning-search-forward-end-pwd
@@ -651,6 +725,8 @@ case "${UID}" in
 	;;
 esac
 PROMPT="${bold_start}[$mode_color%n@%m %{$fg[yellow]%}%~%{${reset_color}%}${bold_start}]${prompt_symbol_with_color}$bold_end "
+PROMPT_before="${bold_start}[$mode_color%n@%m %{$fg[yellow]%}%~%{${reset_color}%}${bold_start}"
+PROMPT_after="]${prompt_symbol_with_color}$bold_end "
 RPROMPT="%{${fg[magenta]}%}%*%{${reset_color}%}"
 
 IFS=$'\n\t '
@@ -916,6 +992,7 @@ function _raw_cmd_line {
 	echo -ne "\033[0m"
 	echo -ne "\033[1A"
 	exec 1>&1
+	CPWD=
 	zle accept-line
 }
 
