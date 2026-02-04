@@ -250,24 +250,6 @@ def_ruby '
 '
 __clear_prev__ $$
 
-def_ruby '
-	def __clear_zsh_dsize_max
-		mf = ENV["HOME"] + "/.zsh_d_size_max"
-		if File.exist? mf
-			print "\x1b7"
-			STDOUT.flush
-			system "tput cup 0 0"
-			system "tput hpa 999"
-			dsmax = IO.read(mf).to_i rescue 0
-			print "\x1b[#{dsmax - 1}D\x1b[35m"
-			print " " * (dsmax)
-			STDOUT.flush
-			print "\x1b[0m\x1b8"
-			STDOUT.flush
-			File.delete mf
-		end
-	end
-'
 
 __one_arg(){
 	echo -n $1
@@ -283,16 +265,8 @@ mkdir -p "$HOME/.tmp/Yk/zsh/zsh.local"
 
 zstyle ':completion:*:default' menu select=2
 preexec() {
-	__clear_zsh_dsize_max
-	if [ "$ST_hist" != "1" ]; then
-		if [ -e $HOME/.zsh_to_cd ] && [ -d "`cat $HOME/.zsh_to_cd`" ];then
-			cd `cat $HOME/.zsh_to_cd`
-			rm  -f $HOME/.zsh_to_cd
-		fi
-		mkdir -p ~/.zsh_history_pwd.d
-		echo $PWD > ~/.zsh_history_pwd.d/$raw_cmd_line_hist
-		PPWD=$PWD
-	fi
+
+
 	local cmd
 	__first_cmd $1
 	cmd=$__first_cmd
@@ -312,7 +286,9 @@ preexec() {
 		rm -f "$HOME/.tmp/Yk/zsh/zsh.local/idle.$$.$__shell_rnd__"
 	fi
 }
+
 precmd() {
+	for_precmd
 	echo -ne > "$HOME/.tmp/Yk/zsh/zsh.local/idle.$$.$__shell_rnd__"
 }
 if functions END >/dev/null 2>&1; then
@@ -529,70 +505,30 @@ SAVEHIST=50000
 setopt hist_ignore_dups     # ignore duplication command history list
 setopt share_history        # share command history data
 
-def_ruby '
-	def hist_set_cd hx,home,pwd
-		d = nil
-		f = "#{home}/.zsh_history_pwd.d/#{hx}"
-		if File.exist? f
-			d = IO.read(f).lines[-1].strip
-		end
-		if d && d != pwd
-#			if false
-				#print "\x1b7"
-				#STDOUT.flush
-				#system "tput cup 0 0"
-				#system "tput hpa 999"
-				mf = "#{home}/.zsh_d_size_max"
-				dsmax = IO.read(mf).to_i rescue 0
-				if dsmax > d.size
-					#print "\x1b[#{dsmax - 1}D\x1b[35m"
-					#print " " * (dsmax - d.size)
-				else
-					#print "\x1b[#{d.size - 1}D\x1b[35m"
-					File.open mf, "w" do |fw|
-						fw.write d.size.to_s
-					end
-				end
-				#print d
-				#print "\x1b[0m\x1b8"
-				#STDOUT.flush
-#			end
-			File.open "#{home}/.zsh_to_cd", "w" do |fw|
-				fw.write d
-			end
-		else
-			if File.exist? "#{home}/.zsh_to_cd"
-				File.delete "#{home}/.zsh_to_cd"
-			end
-#			if false
-				mf = "#{home}/.zsh_d_size_max"
-				dsmax = IO.read(mf).to_i rescue 0
-				if dsmax > 0
-					#print "\x1b7"
-					#STDOUT.flush
-					#system "tput cup 0 0"
-					#system "tput hpa 999"
-					#print "\x1b[#{dsmax - 1}D\x1b[35m"
-					#print " " * dsmax
-					#print "\x1b[0m\x1b8"
-					#STDOUT.flush
-				end
-#			end
-		end
-	end
-'
 
-#PROMPT_before=$(expr "$PROMPT" : '\(.*%~\)')
-#PROMPT_after=$(expr "$PROMPT" : '.*%~\(.*\)')
+for_precmd(){
+	CPWD=
+	zsh_d_size_max=
+	if [ -z "$BUFFER" ]; then
+		reset_prompt -n
+	fi
+}
 
+for_interrupt(){
+	if [ -z "$CPWD" ];then
+		CPWD=$PWD
+	fi
+	cd "$CPWD"
+	zsh_d_size_max=
+	reset_prompt -n
+}
 
 reset_prompt() {
-	if [ -e "$HOME/.zsh_d_size_max" ];then
-		local szm
+	if [ -n "$zsh_d_size_max" ];then
+		local szm="$zsh_d_size_max"
 		local sz
 		local padd=0
 		local spaces=""
-		read szm < "$HOME/.zsh_d_size_max"
 		if [[ "$PWD" = "$HOME/"* ]];then
 			sz=$((${#PWD} - ${#HOME} + 1))
 		elif [ "$PWD" = "$HOME" ];then
@@ -610,38 +546,39 @@ reset_prompt() {
 	else
 		PROMPT="${PROMPT_before}${PROMPT_after}"
 	fi
+	if [ "$1" = "-n" ];then
+		return
+	fi
 	zle reset-prompt
 }
 
+
 h_set_cd(){
-	echo "h_set_cd CPWD=$CPWD" >> $HOME/.zsh_cpwd
 	if [ -z "$CPWD" ];then
 		CPWD=$PWD
-		if [ "$CPWD" = "$HOME" ];then
-			echo -n 1 > ~/.zsh_d_size_max
-		else
-			echo -n ${#CPWD} > ~/.zsh_d_size_max
-		fi
 	fi
-	hist_set_cd $HISTNO $HOME $CPWD
-	if [ -e "$HOME/.zsh_to_cd" ];then
-		if [ "`cat $HOME/.zsh_to_cd`" != "$PWD" ];then
-			cd "`cat $HOME/.zsh_to_cd`"
+	local f="$HOME/.zsh_history_pwd.d/$HISTNO"
+	local d=""
+	if [ ! -e "$f" ] || ! read d < "$f" 2> /dev/null || [ -z "$d" -o "$d" = "$PWD" ]; then
+		d="$CPWD"
+	fi
+	if [ -n "$d" ];then
+		if [ "$d" != "$PWD" ];then
+			cd "$d"
+			d="$(print -P %~)"
+			if [ -n "$zsh_d_size_max" ]; then
+				((zsh_d_size_max < ${#d})) && zsh_d_size_max=${#d}
+			else
+				zsh_d_size_max=${#d}
+			fi
 			reset_prompt
 		fi
-	elif [ "$CPWD" != "$PWD" ];then
-		cd "$CPWD"
-		reset_prompt
 	fi
 }
 
 function hook_interrupt() {
-	if [ -z "$CPWD" ];then
-		CPWD=$PWD
-	fi
-	cd "$CPWD"
-	rm -f $HOME/.zsh_d_size_max
-	reset_prompt
+	for_interrupt
+	print_exec_time
 	zle send-break
 }
 zle -N hook_interrupt
@@ -726,7 +663,7 @@ case "${UID}" in
 esac
 PROMPT="${bold_start}[$mode_color%n@%m %{$fg[yellow]%}%~%{${reset_color}%}${bold_start}]${prompt_symbol_with_color}$bold_end "
 PROMPT_before="${bold_start}[$mode_color%n@%m %{$fg[yellow]%}%~%{${reset_color}%}${bold_start}"
-PROMPT_after="]${prompt_symbol_with_color}$bold_end "
+PROMPT_after=" ]${prompt_symbol_with_color}$bold_end "
 RPROMPT="%{${fg[magenta]}%}%*%{${reset_color}%}"
 
 IFS=$'\n\t '
@@ -977,6 +914,17 @@ def_ruby '
 		end
 	end
 '
+
+print_exec_time(){
+	echo -ne "\033[999C"
+	echo -ne "\033[8D"
+	echo -ne "\033[34m"
+	date +"%H:%M:%S"
+	echo -ne "\033[0m"
+	echo -ne "\033[1A"
+	exec 1>&1
+}
+
 function _raw_cmd_line {
 	local hist_last="$(for j in `fc -l -1`; do echo $j;break;done)"
 	raw_cmd_line_hist=$((hist_last + 1))
@@ -985,14 +933,7 @@ function _raw_cmd_line {
 	if [ -n "$raw_cmd_line" ]; then
 		BUFFER=$raw_cmd_line
 	fi
-	echo -ne "\033[999C"
-	echo -ne "\033[8D"
-	echo -ne "\033[34m"
-	date +"%H:%M:%S"
-	echo -ne "\033[0m"
-	echo -ne "\033[1A"
-	exec 1>&1
-	CPWD=
+	print_exec_time
 	zle accept-line
 }
 
