@@ -188,23 +188,6 @@ else
     umask 022
 fi
 
-# are we an interactive shell?
-## Default shell configuration
-#
-# set prompt
-#
-autoload colors
-colors
-
-case ${UID} in
-0)
-	prompt_symbol="#"
-	prompt_symbol_with_color="%{${fg[red]}%}#%{${reset_color}%}"
-	;;
-*)
-	prompt_symbol="$"
-	prompt_symbol_with_color="%{${fg[green]}%}\$%{${reset_color}%}"
-esac
 
 def_ruby '
 	def __first_cmd c = nil
@@ -264,9 +247,8 @@ __cur_hist(){
 mkdir -p "$HOME/.tmp/Yk/zsh/zsh.local"
 
 zstyle ':completion:*:default' menu select=2
+
 preexec() {
-
-
 	local cmd
 	__first_cmd $1
 	cmd=$__first_cmd
@@ -288,9 +270,10 @@ preexec() {
 }
 
 precmd() {
-	for_precmd
+	dhist_for_precmd
 	echo -ne > "$HOME/.tmp/Yk/zsh/zsh.local/idle.$$.$__shell_rnd__"
 }
+
 if functions END >/dev/null 2>&1; then
 	END <<EOF
 		rm -f "$HOME/.tmp/Yk/zsh/zsh.local/idle.$$.$__shell_rnd__"
@@ -506,24 +489,53 @@ setopt hist_ignore_dups     # ignore duplication command history list
 setopt share_history        # share command history data
 
 
-for_precmd(){
+# are we an interactive shell?
+## Default shell configuration
+#
+# set prompt
+#
+autoload colors
+colors
+
+case ${UID} in
+0)
+	prompt_symbol="#"
+	prompt_symbol_with_color="%{${fg[red]}%}#%{${reset_color}%}"
+	mode_color="%{${fg[red]}%}"
+	bold_start="%B"
+	bold_end="%b"
+	;;
+*)
+	prompt_symbol="$"
+	prompt_symbol_with_color="%{${fg[green]}%}\$%{${reset_color}%}"
+	mode_color="%{${fg[cyan]}%}"
+esac
+
+
+PROMPT_before="${bold_start}[$mode_color%n@%m %{$fg[yellow]%}%~%{${reset_color}%}${bold_start}"
+PROMPT_after="]${prompt_symbol_with_color}$bold_end "
+PROMPT="$PROMPT_before$PROMPT_after"
+RPROMPT="%{${fg[magenta]}%}%*%{${reset_color}%}"
+
+
+dhist_for_precmd(){
 	CPWD=
 	zsh_d_size_max=
 	if [ -z "$BUFFER" ]; then
-		reset_prompt -n
+		dhist_reset_prompt -n
 	fi
 }
 
-for_interrupt(){
+dhist_for_interrupt(){
 	if [ -z "$CPWD" ];then
 		CPWD=$PWD
 	fi
 	cd "$CPWD"
 	zsh_d_size_max=
-	reset_prompt -n
+	dhist_reset_prompt -n
 }
 
-reset_prompt() {
+dhist_reset_prompt() {
 	if [ -n "$zsh_d_size_max" ];then
 		local szm="$zsh_d_size_max"
 		local sz
@@ -553,7 +565,7 @@ reset_prompt() {
 }
 
 
-h_set_cd(){
+dhist_h_set_cd(){
 	if [ -z "$CPWD" ];then
 		CPWD=$PWD
 	fi
@@ -571,13 +583,13 @@ h_set_cd(){
 			else
 				zsh_d_size_max=${#d}
 			fi
-			reset_prompt
+			dhist_reset_prompt
 		fi
 	fi
 }
 
 function hook_interrupt() {
-	for_interrupt
+	dhist_for_interrupt
 	print_exec_time
 	zle send-break
 }
@@ -588,24 +600,24 @@ trap 'hook_interrupt' INT
 
 function history-beginning-search-backward-end-pwd(){
 	zle .history-beginning-search-backward
-	h_set_cd
+	dhist_h_set_cd
 }
 
 function history-beginning-search-forward-end-pwd(){
 	zle .history-beginning-search-forward
-	h_set_cd
+	dhist_h_set_cd
 }
 
 
 function up-line-or-history-hook(){
 	zle .up-line-or-history
-	h_set_cd
+	dhist_h_set_cd
 }
 
 
 function down-line-or-history-hook(){
 	zle .down-line-or-history
-	h_set_cd
+	dhist_h_set_cd
 }
 
 
@@ -613,6 +625,7 @@ zle -N history-beginning-search-backward-end history-beginning-search-backward-e
 zle -N history-beginning-search-forward-end history-beginning-search-forward-end-pwd
 zle -N up-line-or-history up-line-or-history-hook
 zle -N down-line-or-history down-line-or-history-hook
+
 
 
 
@@ -649,22 +662,15 @@ esac
 
 case "${UID}" in
 0)
-	mode_color="%{${fg[red]}%}"
-	bold_start="%B"
-	bold_end="%b"
 	#alias rm='rm -i'
 	alias cp='cp -i'
 	alias mv='mv -i'
 	alias vi='vim'
 	;;
 *)
-	mode_color="%{${fg[cyan]}%}"
 	;;
 esac
-PROMPT="${bold_start}[$mode_color%n@%m %{$fg[yellow]%}%~%{${reset_color}%}${bold_start}]${prompt_symbol_with_color}$bold_end "
-PROMPT_before="${bold_start}[$mode_color%n@%m %{$fg[yellow]%}%~%{${reset_color}%}${bold_start}"
-PROMPT_after=" ]${prompt_symbol_with_color}$bold_end "
-RPROMPT="%{${fg[magenta]}%}%*%{${reset_color}%}"
+
 
 IFS=$'\n\t '
 
