@@ -172,8 +172,8 @@ compinit
 
 
 mkdir -p $HOME/.tmp/Yk/zsh/zsh.local
-
-eval $(zsh_rb)
+to_eval="$(zsh_rb)"
+eval "$to_eval"
 
 # users generic .zshrc file for zsh(1)
 
@@ -233,7 +233,6 @@ if [ "$__shell_rnd__" = "" ];then
 	__shell_rnd__=$(( $RANDOM./1<<15 ))
 fi
 
-
 def_ruby '
 	def __clear_prev__ tmp
 		require "Yk/path_aux"
@@ -250,24 +249,6 @@ def_ruby '
 '
 __clear_prev__ $$
 
-def_ruby '
-	def __clear_zsh_dsize_max
-		mf = ENV["HOME"] + "/.zsh_d_size_max"
-		if File.exist? mf
-			print "\x1b7"
-			STDOUT.flush
-			system "tput cup 0 0"
-			system "tput hpa 999"
-			dsmax = IO.read(mf).to_i rescue 0
-			print "\x1b[#{dsmax - 1}D\x1b[35m"
-			print " " * (dsmax)
-			STDOUT.flush
-			print "\x1b[0m\x1b8"
-			STDOUT.flush
-			File.delete mf
-		end
-	end
-'
 
 __one_arg(){
 	echo -n $1
@@ -283,13 +264,7 @@ mkdir -p "$HOME/.tmp/Yk/zsh/zsh.local"
 
 zstyle ':completion:*:default' menu select=2
 preexec() {
-	__clear_zsh_dsize_max
-#	if [ "$ST_hist" != "1" ]; then
 	if [ -n "$raw_cmd_line_hist" ]; then
-		if [ -e $HOME/.zsh_to_cd ] && [ -d "`cat $HOME/.zsh_to_cd`" ];then
-			cd `cat $HOME/.zsh_to_cd`
-			rm  -f $HOME/.zsh_to_cd
-		fi
 		mkdir -p ~/.zsh_history_pwd.d
 		echo $PWD > ~/.zsh_history_pwd.d/$raw_cmd_line_hist
 		PPWD=$PWD
@@ -314,6 +289,7 @@ preexec() {
 	fi
 }
 precmd() {
+	for_precmd
 	echo -ne > "$HOME/.tmp/Yk/zsh/zsh.local/idle.$$.$__shell_rnd__"
 }
 if functions END >/dev/null 2>&1; then
@@ -530,70 +506,30 @@ SAVEHIST=50000
 setopt hist_ignore_dups     # ignore duplication command history list
 setopt share_history        # share command history data
 
-def_ruby '
-	def hist_set_cd hx,home,pwd
-		d = nil
-		f = "#{home}/.zsh_history_pwd.d/#{hx}"
-		if File.exist? f
-			d = IO.read(f).lines[-1].strip
-		end
-		if d && d != pwd
-#			if false
-				#print "\x1b7"
-				#STDOUT.flush
-				#system "tput cup 0 0"
-				#system "tput hpa 999"
-				mf = "#{home}/.zsh_d_size_max"
-				dsmax = IO.read(mf).to_i rescue 0
-				if dsmax > d.size
-					#print "\x1b[#{dsmax - 1}D\x1b[35m"
-					#print " " * (dsmax - d.size)
-				else
-					#print "\x1b[#{d.size - 1}D\x1b[35m"
-					File.open mf, "w" do |fw|
-						fw.write d.size.to_s
-					end
-				end
-				#print d
-				#print "\x1b[0m\x1b8"
-				#STDOUT.flush
-#			end
-			File.open "#{home}/.zsh_to_cd", "w" do |fw|
-				fw.write d
-			end
-		else
-			if File.exist? "#{home}/.zsh_to_cd"
-				File.delete "#{home}/.zsh_to_cd"
-			end
-#			if false
-				mf = "#{home}/.zsh_d_size_max"
-				dsmax = IO.read(mf).to_i rescue 0
-				if dsmax > 0
-					#print "\x1b7"
-					#STDOUT.flush
-					#system "tput cup 0 0"
-					#system "tput hpa 999"
-					#print "\x1b[#{dsmax - 1}D\x1b[35m"
-					#print " " * dsmax
-					#print "\x1b[0m\x1b8"
-					#STDOUT.flush
-				end
-#			end
-		end
-	end
-'
 
-#PROMPT_before=$(expr "$PROMPT" : '\(.*%~\)')
-#PROMPT_after=$(expr "$PROMPT" : '.*%~\(.*\)')
+for_precmd(){
+	CPWD=
+	zsh_d_size_max=
+	if [ -z "$BUFFER" ]; then
+		reset_prompt -n
+	fi
+}
 
+for_interrupt(){
+	if [ -z "$CPWD" ];then
+		CPWD=$PWD
+	fi
+	cd "$CPWD"
+	zsh_d_size_max=
+	reset_prompt -n
+}
 
 reset_prompt() {
-	if [ -e "$HOME/.zsh_d_size_max" ];then
-		local szm
+	if [ -n "$zsh_d_size_max" ];then
+		local szm="$zsh_d_size_max"
 		local sz
 		local padd=0
 		local spaces=""
-		read szm < "$HOME/.zsh_d_size_max"
 		if [[ "$PWD" = "$HOME/"* ]];then
 			sz=$((${#PWD} - ${#HOME} + 1))
 		elif [ "$PWD" = "$HOME" ];then
@@ -611,29 +547,57 @@ reset_prompt() {
 	else
 		PROMPT="${PROMPT_before}${PROMPT_after}"
 	fi
+	if [ "$1" = "-n" ];then
+		return
+	fi
 	zle reset-prompt
 }
 
+tilderize_path(){
+	local p="$1"
+	if [[ "$p" = "$HOME/"* ]];then
+		p="~/${p#"$HOME/"}"
+	elif [ "$p" = "$HOME" ];then
+		p="~"
+	fi
+	echo -n "$p"
+}
+
 h_set_cd(){
-	echo "h_set_cd CPWD=$CPWD" >> $HOME/.zsh_cpwd
+	if [ "$HISTNO" = "$histno_prev" ]; then
+		return
+	fi
 	if [ -z "$CPWD" ];then
 		CPWD=$PWD
-		if [ "$CPWD" = "$HOME" ];then
-			echo -n 1 > ~/.zsh_d_size_max
-		else
-			echo -n ${#CPWD} > ~/.zsh_d_size_max
-		fi
 	fi
-	hist_set_cd $HISTNO $HOME $CPWD
-	if [ -e "$HOME/.zsh_to_cd" ];then
-		if [ "`cat $HOME/.zsh_to_cd`" != "$PWD" ];then
-			cd "`cat $HOME/.zsh_to_cd`"
+	local f="$HOME/.zsh_history_pwd.d/$HISTNO"
+	local d=""
+	if [ ! -e "$f" ] || ! read d < "$f" 2> /dev/null || [ -z "$d" ]; then
+		d="$CPWD"
+	fi
+	if [ -n "$d" ];then
+		if [ "$d" != "$PWD" ];then
+			pwd="$(print -P %~)"
+			cd "$d"
+			d="$(tilderize_path "$d")"
+			if [ -n "$zsh_d_size_max" ]; then
+				if ((zsh_d_size_max < ${#d})); then
+				 	zsh_d_size_max=${#d}
+				else
+					zsh_d_size_max=${#pwd}
+				fi
+			elif ((#d > #pwd)); then
+				x=1
+				zsh_d_size_max=${#d}
+			else
+				x=2
+				zsh_d_size_max=${#pwd}
+			fi
+			echo "x=$x #d=${#d} > #pwd=${#pwd} cd from '$pwd' to '$d' from history : $HISTNO : $BUFFER zsh_d_size_max=$zsh_d_size_max" >> $HOME/.zsh_cd_history
 			reset_prompt
 		fi
-	elif [ "$CPWD" != "$PWD" ];then
-		cd "$CPWD"
-		reset_prompt
 	fi
+	histno_prev=$HISTNO
 }
 
 function hook_interrupt() {
@@ -641,7 +605,7 @@ function hook_interrupt() {
 		CPWD=$PWD
 	fi
 	cd "$CPWD"
-	rm -f $HOME/.zsh_d_size_max
+	zsh_d_size_max=
 	reset_prompt
 	zle send-break
 }
@@ -911,13 +875,6 @@ alias axel="axel --num-connections=10"
 alias vi="vim"
 
 
-
-fnd(){
-	echo -n > /dev/nil
-	# empty
-}
-
-
 def_ruby '
 	require "shellwords"
 	require "Yk/path_aux"
@@ -929,7 +886,7 @@ def_ruby '
 			rescue
 				return ""
 			end
-			if carr[0] == "fnd" && carr.size == 3 || carr.size == 2
+			if carr[0] == "fnd" && (carr.size == 3 || carr.size == 2)
 				carr.shift
 				dir = "."
 				fname = "*"
@@ -978,22 +935,45 @@ def_ruby '
 		end
 	end
 '
+
+function is_cursor_at_bottom() {
+  # カーソル位置を取得
+  exec < /dev/tty
+  oldstty=$(stty -g)
+  stty -echo -icanon time 0 min 0
+  echo -ne '\e[6n' > /dev/tty
+  IFS=';' read -r -d R -a pos
+  stty "$oldstty"
+  # pos[0]は"\e[row"なので、行番号だけ抽出
+  row=${pos[0]#*[}
+  # 端末の行数を取得
+  lines=$(tput lines)
+  if [[ "$row" == "$lines" ]]; then
+    return 0  # 下端にいる
+  else
+    return 1  # 下端ではない
+  fi
+}
+
 function _raw_cmd_line {
-	local hist_last="$(for j in `fc -l -1`; do echo $j;break;done)"
-	raw_cmd_line_hist=$((hist_last + 1))
-	echo $raw_cmd_line_hist >> $HOME/.zsh_raw_cmd_line_hist
+	hist_last=`fc -l -1 | head -1 | awk '{print $1}'`
+	raw_cmd_line_hist=$((hist_last + 1)) || true
+	mkdir -p ~/.zsh_history_pwd.d
+	echo $PWD > ~/.zsh_history_pwd.d/$raw_cmd_line_hist
 	export RAW_CMD_LINE=$BUFFER
 	raw_cmd_line $BUFFER
 	if [ -n "$raw_cmd_line" ]; then
 		BUFFER=$raw_cmd_line
 	fi
-	echo -ne "\033[999C"
-	echo -ne "\033[8D"
-	echo -ne "\033[34m"
-	date +"%H:%M:%S"
-	echo -ne "\033[0m"
-	echo -ne "\033[1A"
-	exec 1>&1
+	echo -ne '\e7'
+ 	echo -ne "\033[999C"
+ 	echo -ne "\033[8D"
+ 	echo -ne "\033[34m"
+ 	date=`date +"%H:%M:%S"`
+	echo -ne $date
+ 	echo -ne "\033[0m"
+	echo -ne '\e8'
+ 	exec 1>&1
 	CPWD=
 	zle accept-line
 }
@@ -1060,15 +1040,67 @@ relaod_zshrc_local(){
 }
 
 
-history(){
-	builtin history "$@" | while read -r line; do
-		key="${line%% *}"  # 先頭フィールド（空白区切り）
-		file="$HOME/.zsh_history_pwd.d/$key"
-		if [ -f "$file" ]; then
-			firstline=$(head -n 1 "$file")
-		else
-			firstline=""
+hist(){
+	dmax=0
+	kmax=0
+	asterisk=
+	while read -r line; do
+		key="${line%%  *}"
+		key_no_star="${key%\*}"
+		if [ $key != $key_no_star ]; then
+			asterisk=1
 		fi
-		echo "$line $firstline"
-	done
+		if [[ $key =~ '^[0-9]+(\*|)$' ]]; then
+			val="${line#*  }"
+			file="$HOME/.zsh_history_pwd.d/$key"
+			kmax=$(( ${#key} > kmax ? ${#key} : kmax ))
+			if [ -f "$file" ]; then
+				read dir < "$file"
+				dir=$(tilderize_path "$dir")
+				dmax=$(( ${#dir} > dmax ? ${#dir} : dmax ))
+			fi
+		else
+		fi
+	done < <(builtin history "$@")
+	if [ -n "$asterisk" ]; then
+		sspace=" "
+	else
+		sspace=""
+	fi
+	while read -r line; do
+		key="${line%%  *}"
+		key_no_star="${key%\*}"
+		if [ $key != $key_no_star ]; then
+			sspace=""
+		fi
+		if [[ $key =~ '^[0-9]+(\*|)$' ]]; then
+			val="${line#*  }"
+			file="$HOME/.zsh_history_pwd.d/$key"
+			lpadd=$(( kmax - ${#key} ))
+			lspaces=$(printf '%*s' "$lpadd" '')
+			if [ -f "$file" ]; then
+				read dir < "$file"
+				dir=$(tilderize_path "$dir")
+				rpadd=$(( dmax - ${#dir} ))
+				rspaces=$(printf '%*s' "$rpadd" '')
+				firstline="$lspaces$key$sspace|$dir$rspaces|"
+			else
+				rspaces=$(printf '%*s' "$dmax" '')
+				firstline="$lspaces$key$sspace|$rspaces|"
+			fi
+			echo -n "$firstline"
+			local isFirstLine=1
+			Arr=($val)
+			lspaces=$(printf '%*s' $(( kmax + asterisk )) '')
+			rspaces=$(printf '%*s' "$dmax" '')
+			echo $val | while IFS= read -r l; do
+				if [ "$isFirstLine" = "1" ]; then
+					isFirstLine=0
+				else
+					echo -n "$lspaces|$rspaces|"
+				fi
+				echo "$l"
+			done
+		fi
+	done < <(builtin history "$@")
 }
